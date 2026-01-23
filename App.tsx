@@ -61,7 +61,7 @@ interface Reservation {
   createdAt: Date;
 }
 
-type ViewMode = 'calendar' | 'list' | 'today' | 'agencies';
+type ViewMode = 'calendar' | 'list' | 'pendientes' | 'resumen';
 
 // Agencias que venden para el local
 const AGENCIAS = [
@@ -822,10 +822,22 @@ export default function App() {
     reservasPagadas: reservations.filter(r => r.status === 'RESERVA_PAGADA').length,
     cobradas: reservations.filter(r => r.status === 'COBRADO_COMPLETO').length,
     totalReservas: reservations.reduce((sum, r) => {
-      // Para agencias, contamos la comisión; para directos, la reserva pagada
-      return sum + (r.vieneDeAgencia ? r.comisionAgencia : r.reservaPagada);
+      // Para agencias, contamos la comisión SOLO si NO es "Otra agencia"
+      // Porque "Otra agencia" no nos da el dinero a nosotros
+      if (r.vieneDeAgencia) {
+        return r.nombreAgencia === 'Otra agencia' ? sum : sum + r.comisionAgencia;
+      }
+      // Para directos, la reserva pagada
+      return sum + r.reservaPagada;
     }, 0),
-    totalCobrado: reservations.filter(r => r.status === 'COBRADO_COMPLETO').reduce((sum, r) => sum + r.precioTotal, 0),
+    totalCobrado: reservations.filter(r => r.status === 'COBRADO_COMPLETO').reduce((sum, r) => {
+      // Solo sumamos lo que realmente cobramos nosotros
+      // Si es "Otra agencia", no sumamos el total porque ellos se quedan con la comisión
+      if (r.vieneDeAgencia && r.nombreAgencia === 'Otra agencia') {
+        return sum;
+      }
+      return sum + r.precioTotal;
+    }, 0),
     pendienteCobrar: reservations.filter(r => r.status === 'RESERVA_PAGADA').reduce((sum, r) => sum + calcularPendienteCobro(r), 0)
   };
 
@@ -1056,44 +1068,59 @@ export default function App() {
     </div>
   );
 
-  const renderTodayView = () => {
-    const todayReservations = getTodayReservations();
+  const renderPendientesView = () => {
+    const today = new Date();
+    const pendientes = reservations
+      .filter(r => r.status === 'RESERVA_PAGADA')
+      .sort((a, b) => a.fecha.getTime() - b.fecha.getTime());
 
     return (
       <div className="max-w-3xl mx-auto space-y-4">
-        <div className="bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-xl shadow-lg">
-          <h2 className="text-2xl font-bold mb-2">Cobros de Hoy</h2>
-          <p className="text-blue-100">
-            {todayReservations.length > 0
-              ? `Tienes ${todayReservations.length} grupo(s) para cobrar hoy`
-              : 'No hay grupos programados para hoy'}
+        <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white p-6 rounded-xl shadow-lg">
+          <h2 className="text-2xl font-bold mb-2">Pendientes de Cobro</h2>
+          <p className="text-orange-100">
+            {pendientes.length > 0
+              ? `Tienes ${pendientes.length} grupo(s) pendientes de cobro`
+              : 'No hay grupos pendientes de cobro'}
           </p>
         </div>
 
-        {todayReservations.length > 0 ? (
-          todayReservations.map(reservation => {
+        {pendientes.length > 0 ? (
+          pendientes.map(reservation => {
             const pendiente = calcularPendienteCobro(reservation);
+            const isToday = isSameDay(reservation.fecha, today);
             return (
-              <div key={reservation.id} className="bg-white p-6 rounded-xl shadow-md border-2 border-gray-200">
+              <div
+                key={reservation.id}
+                className={`bg-white p-6 rounded-xl shadow-md border-4 ${
+                  isToday
+                    ? 'border-orange-400 bg-orange-50'
+                    : 'border-gray-200'
+                }`}
+              >
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                      {reservation.nombreGrupo}
-                      {reservation.vieneDeAgencia && (
-                        <span className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-xs font-bold rounded">
-                          <Building2 className="w-3 h-3" />
-                          {reservation.nombreAgencia}
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                        {reservation.nombreGrupo}
+                        {reservation.vieneDeAgencia && (
+                          <span className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-xs font-bold rounded">
+                            <Building2 className="w-3 h-3" />
+                            {reservation.nombreAgencia}
+                          </span>
+                        )}
+                      </h3>
+                      {isToday && (
+                        <span className="px-2 py-1 bg-orange-500 text-white text-xs font-bold rounded animate-pulse">
+                          ¡HOY!
                         </span>
                       )}
-                    </h3>
-                    <p className="text-gray-600">{reservation.local}</p>
+                    </div>
+                    <p className="text-gray-600">{formatDate(reservation.fecha)}</p>
+                    <p className="text-sm text-gray-500">{reservation.local}</p>
                   </div>
-                  <span className={`px-3 py-1 rounded-full text-sm font-bold ${
-                    reservation.status === 'COBRADO_COMPLETO'
-                      ? 'bg-green-100 text-green-800'
-                      : 'bg-orange-100 text-orange-800'
-                  }`}>
-                    {reservation.status === 'COBRADO_COMPLETO' ? 'Cobrado' : 'Pendiente'}
+                  <span className="px-3 py-1 rounded-full text-sm font-bold bg-orange-100 text-orange-800">
+                    Pendiente
                   </span>
                 </div>
 
@@ -1118,7 +1145,7 @@ export default function App() {
                     </div>
                   )}
                   <div>
-                    <p className="text-sm text-gray-600">A Cobrar Hoy</p>
+                    <p className="text-sm text-orange-600">A Cobrar</p>
                     <p className="text-xl font-bold text-orange-600">{formatCurrency(pendiente)}</p>
                   </div>
                 </div>
@@ -1132,36 +1159,142 @@ export default function App() {
                     }}
                     className="flex-1 bg-green-500 hover:bg-green-600 text-white py-3 px-4 rounded-lg font-bold flex items-center justify-center gap-2"
                   >
-                    <Phone className="w-5 h-5" />
-                    Llamar ({reservation.contacto})
+                    <Send className="w-5 h-5" />
+                    WhatsApp
                   </button>
-                  {reservation.status === 'RESERVA_PAGADA' ? (
-                    <button
-                      onClick={() => marcarCobradoCompleto(reservation.id)}
-                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-bold flex items-center justify-center gap-2"
-                    >
-                      <CheckCircle2 className="w-5 h-5" />
-                      Cobrado Completo
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => revertirCobro(reservation.id)}
-                      className="flex-1 bg-orange-600 hover:bg-orange-700 text-white py-3 px-4 rounded-lg font-bold flex items-center justify-center gap-2"
-                    >
-                      <XCircle className="w-5 h-5" />
-                      Revertir a Pendiente
-                    </button>
-                  )}
+                  <button
+                    onClick={() => marcarCobradoCompleto(reservation.id)}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-bold flex items-center justify-center gap-2"
+                  >
+                    <CheckCircle2 className="w-5 h-5" />
+                    Cobrado Completo
+                  </button>
                 </div>
               </div>
             );
           })
         ) : (
           <div className="bg-white p-12 rounded-xl shadow-md text-center">
-            <Calendar className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-            <p className="text-gray-500">No hay cobros programados para hoy</p>
+            <CheckCircle2 className="w-16 h-16 mx-auto mb-4 text-green-300" />
+            <p className="text-gray-500">¡Todo cobrado! No hay pendientes</p>
           </div>
         )}
+      </div>
+    );
+  };
+
+  const renderResumenView = () => {
+    const saturdays = getSeasonSaturdays();
+    const monthsData: { [key: number]: { asistentes: number; dinero: number; grupos: number } } = {};
+
+    // Agrupar por mes
+    saturdays.forEach(saturday => {
+      const month = saturday.getMonth();
+      if (!monthsData[month]) {
+        monthsData[month] = { asistentes: 0, dinero: 0, grupos: 0 };
+      }
+    });
+
+    // Calcular totales por sábado
+    const saturdayData = saturdays.map(saturday => {
+      const dayReservations = getReservationsForDate(saturday);
+      const totalAsistentes = dayReservations.reduce((sum, r) => sum + r.asistentes, 0);
+      const totalDinero = dayReservations.reduce((sum, r) => sum + r.precioTotal, 0);
+
+      const month = saturday.getMonth();
+      monthsData[month].asistentes += totalAsistentes;
+      monthsData[month].dinero += totalDinero;
+      monthsData[month].grupos += dayReservations.length;
+
+      return {
+        fecha: saturday,
+        asistentes: totalAsistentes,
+        dinero: totalDinero,
+        grupos: dayReservations.length
+      };
+    });
+
+    return (
+      <div className="space-y-6">
+        {/* Resumen Mensual */}
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h3 className="text-2xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+            <DollarSign className="w-6 h-6 text-purple-600" />
+            Resumen Mensual
+          </h3>
+          <div className="grid md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {availableMonths.map(month => (
+              <div key={month} className="bg-gradient-to-br from-purple-50 to-blue-50 p-4 rounded-lg border-2 border-purple-200">
+                <p className="text-sm font-bold text-purple-700 uppercase">{monthNames[month]}</p>
+                <div className="mt-2 space-y-1">
+                  <div className="text-xs text-gray-600">
+                    Grupos: <span className="font-bold text-gray-900">{monthsData[month]?.grupos || 0}</span>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    Personas: <span className="font-bold text-gray-900">{monthsData[month]?.asistentes || 0}</span>
+                  </div>
+                  <div className="text-sm font-bold text-purple-900">
+                    {formatCurrency(monthsData[month]?.dinero || 0)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Resumen por Sábado */}
+        <div className="bg-white rounded-xl shadow-md overflow-hidden">
+          <div className="p-6 border-b border-gray-200">
+            <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+              <Calendar className="w-6 h-6 text-blue-600" />
+              Resumen por Sábado
+            </h3>
+          </div>
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b-2 border-gray-200">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Fecha</th>
+                <th className="px-4 py-3 text-center text-xs font-bold text-gray-700 uppercase">Grupos</th>
+                <th className="px-4 py-3 text-center text-xs font-bold text-gray-700 uppercase">Asistentes</th>
+                <th className="px-4 py-3 text-right text-xs font-bold text-gray-700 uppercase">Total €</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {saturdayData
+                .filter(d => d.grupos > 0)
+                .map(data => (
+                  <tr key={data.fecha.toISOString()} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                      {formatDate(data.fecha)}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-center text-gray-700">
+                      {data.grupos}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-center font-bold text-gray-900">
+                      {data.asistentes}
+                    </td>
+                    <td className="px-4 py-3 text-sm font-bold text-right text-purple-700">
+                      {formatCurrency(data.dinero)}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+            <tfoot className="bg-gray-100 border-t-2 border-gray-300">
+              <tr>
+                <td className="px-4 py-3 text-sm font-bold text-gray-900 uppercase">TOTAL TEMPORADA</td>
+                <td className="px-4 py-3 text-sm text-center font-bold text-gray-900">
+                  {saturdayData.reduce((sum, d) => sum + d.grupos, 0)}
+                </td>
+                <td className="px-4 py-3 text-sm text-center font-bold text-gray-900">
+                  {saturdayData.reduce((sum, d) => sum + d.asistentes, 0)}
+                </td>
+                <td className="px-4 py-3 text-lg font-bold text-right text-purple-900">
+                  {formatCurrency(saturdayData.reduce((sum, d) => sum + d.dinero, 0))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       </div>
     );
   };
@@ -1244,7 +1377,7 @@ export default function App() {
 
       {/* View Tabs */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
-        <div className="bg-white p-2 rounded-xl shadow-sm border-2 border-gray-200 flex gap-2">
+        <div className="bg-white p-2 rounded-xl shadow-sm border-2 border-gray-200 flex gap-2 flex-wrap">
           <button
             onClick={() => setViewMode('calendar')}
             className={`flex-1 py-3 px-4 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 ${
@@ -1268,15 +1401,26 @@ export default function App() {
             Lista
           </button>
           <button
-            onClick={() => setViewMode('today')}
+            onClick={() => setViewMode('pendientes')}
             className={`flex-1 py-3 px-4 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 ${
-              viewMode === 'today'
-                ? 'bg-blue-600 text-white'
+              viewMode === 'pendientes'
+                ? 'bg-orange-600 text-white'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
           >
-            <CalendarCheck className="w-5 h-5" />
-            Cobros Hoy
+            <AlertCircle className="w-5 h-5" />
+            Pendientes
+          </button>
+          <button
+            onClick={() => setViewMode('resumen')}
+            className={`flex-1 py-3 px-4 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 ${
+              viewMode === 'resumen'
+                ? 'bg-purple-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            <DollarSign className="w-5 h-5" />
+            Resumen
           </button>
         </div>
       </div>
@@ -1312,7 +1456,8 @@ export default function App() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
         {viewMode === 'calendar' && renderCalendarView()}
         {viewMode === 'list' && renderListView()}
-        {viewMode === 'today' && renderTodayView()}
+        {viewMode === 'pendientes' && renderPendientesView()}
+        {viewMode === 'resumen' && renderResumenView()}
       </div>
 
       {showModal && <ReservationModal />}
