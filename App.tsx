@@ -46,13 +46,14 @@ interface Reservation {
   nombreGrupo: string;
   local: string;
   asistentes: number;
-  precioBaseCena: number; // 50€ fijo
+  precioPorPersona: number; // 50€ por persona
+  incluyeNovio: boolean; // Si >= 11, novio no paga
   extras: Extra[]; // Pack copas, etc.
-  precioTotal: number; // base + sum(extras)
+  precioTotal: number; // (50€ * personas que pagan) + sum(extras)
   reservaPagada: number; // Señal pagada (si NO es de agencia)
   vieneDeAgencia: boolean; // Si viene de agencia intermediaria
   nombreAgencia?: string; // Nombre de la agencia
-  comisionAgencia: number; // 10€ * asistentes (lo que cobra la agencia)
+  comisionAgencia: number; // 10€ * personas que pagan (novio gratis si >= 11)
   contacto: string;
   notas?: string;
   status: ReservationStatus;
@@ -107,9 +108,11 @@ const formatCurrency = (amount: number): string => {
   return `${amount.toFixed(2)}€`;
 };
 
-const calcularPrecioTotal = (precioBaseCena: number, extras: Extra[]): number => {
+const calcularPrecioTotal = (asistentes: number, precioPorPersona: number, incluyeNovio: boolean, extras: Extra[]): number => {
+  const personasQuePagan = incluyeNovio ? asistentes : asistentes - 1;
+  const totalCena = personasQuePagan * precioPorPersona;
   const totalExtras = extras.reduce((sum, extra) => sum + extra.precio, 0);
-  return precioBaseCena + totalExtras;
+  return totalCena + totalExtras;
 };
 
 const isSameDay = (date1: Date, date2: Date): boolean => {
@@ -139,7 +142,7 @@ export default function App() {
 
   // Load from localStorage
   useEffect(() => {
-    const saved = localStorage.getItem('admin_reservations_v4');
+    const saved = localStorage.getItem('admin_reservations_v5');
     if (saved) {
       try {
         const data = JSON.parse(saved);
@@ -149,7 +152,8 @@ export default function App() {
           createdAt: new Date(r.createdAt),
           vieneDeAgencia: r.vieneDeAgencia || false,
           comisionAgencia: r.comisionAgencia || 0,
-          precioBaseCena: r.precioBaseCena || 50,
+          precioPorPersona: r.precioPorPersona || 50,
+          incluyeNovio: r.incluyeNovio !== undefined ? r.incluyeNovio : (r.asistentes < 11),
           extras: r.extras || [],
           pagos: (r.pagos || []).map((p: any) => ({
             ...p,
@@ -161,27 +165,28 @@ export default function App() {
         console.error('Error loading reservations', e);
       }
     } else {
-      // Migrar desde v3 si existe
-      const savedV3 = localStorage.getItem('admin_reservations_v3');
-      if (savedV3) {
+      // Migrar desde v3/v4 si existe
+      const savedV4 = localStorage.getItem('admin_reservations_v4') || localStorage.getItem('admin_reservations_v3');
+      if (savedV4) {
         try {
-          const data = JSON.parse(savedV3);
+          const data = JSON.parse(savedV4);
           const migrated = data.map((r: any) => ({
             ...r,
             fecha: new Date(r.fecha),
             createdAt: new Date(r.createdAt),
             vieneDeAgencia: r.vieneDeAgencia || false,
-            comisionAgencia: r.comisionAgencia || 0,
-            precioBaseCena: 50,
+            precioPorPersona: 50,
+            incluyeNovio: r.asistentes < 11,
             extras: [],
-            precioTotal: 50, // Resetear a precio base
+            precioTotal: r.asistentes >= 11 ? (r.asistentes - 1) * 50 : r.asistentes * 50,
+            comisionAgencia: r.vieneDeAgencia ? (r.asistentes >= 11 ? (r.asistentes - 1) * 10 : r.asistentes * 10) : 0,
             pagos: (r.pagos || []).map((p: any) => ({
               ...p,
               fecha: new Date(p.fecha)
             }))
           }));
           setReservations(migrated);
-          console.log('Datos migrados de v3 a v4');
+          console.log('Datos migrados a v5');
         } catch (e) {
           console.error('Error migrando datos', e);
         }
@@ -191,7 +196,7 @@ export default function App() {
 
   // Save to localStorage
   useEffect(() => {
-    localStorage.setItem('admin_reservations_v4', JSON.stringify(reservations));
+    localStorage.setItem('admin_reservations_v5', JSON.stringify(reservations));
   }, [reservations]);
 
   const getSeasonSaturdays = () => {
@@ -263,6 +268,8 @@ export default function App() {
     const pendiente = calcularPendienteCobro(reservation);
     const fecha = formatDate(reservation.fecha);
 
+    const personasQuePagan = reservation.incluyeNovio ? reservation.asistentes : reservation.asistentes - 1;
+
     let msg = `🎉 *RECORDATORIO CENA GRUPO* 🎉\n\n`;
     msg += `👥 *Grupo:* ${reservation.nombreGrupo}\n`;
     msg += `📅 *Fecha:* ${fecha}\n`;
@@ -270,7 +277,11 @@ export default function App() {
     msg += `👨‍👩‍👧‍👦 *Asistentes:* ${reservation.asistentes} personas\n\n`;
     msg += `------------------\n`;
     msg += `💰 *ESTADO DE PAGO*\n`;
-    msg += `Cena base: ${formatCurrency(reservation.precioBaseCena)}\n`;
+    msg += `Precio cena: ${formatCurrency(reservation.precioPorPersona)} x ${personasQuePagan} persona${personasQuePagan !== 1 ? 's' : ''} = ${formatCurrency(personasQuePagan * reservation.precioPorPersona)}\n`;
+
+    if (!reservation.incluyeNovio) {
+      msg += `(Novio/a gratis - 11+ personas)\n`;
+    }
 
     if (reservation.extras && reservation.extras.length > 0) {
       msg += `Extras:\n`;
@@ -349,9 +360,10 @@ export default function App() {
         nombreGrupo: '',
         local: 'Despedidas',
         asistentes: 0,
-        precioBaseCena: 50,
+        precioPorPersona: 50,
+        incluyeNovio: true,
         extras: [],
-        precioTotal: 50,
+        precioTotal: 0,
         reservaPagada: 0,
         vieneDeAgencia: false,
         nombreAgencia: '',
@@ -366,16 +378,21 @@ export default function App() {
     const [nuevoExtra, setNuevoExtra] = useState({ nombre: '', precio: 0 });
 
     useEffect(() => {
-      const base = formData.precioBaseCena || 50;
-      const total = calcularPrecioTotal(base, formData.extras || []);
-      const comision = formData.vieneDeAgencia ? (formData.asistentes || 0) * 10 : 0;
+      const asistentes = formData.asistentes || 0;
+      const precioPorPersona = formData.precioPorPersona || 50;
+      const incluyeNovio = asistentes < 11;
+      const personasQuePagan = incluyeNovio ? asistentes : asistentes - 1;
+
+      const total = calcularPrecioTotal(asistentes, precioPorPersona, incluyeNovio, formData.extras || []);
+      const comision = formData.vieneDeAgencia ? personasQuePagan * 10 : 0;
 
       setFormData(prev => ({
         ...prev,
+        incluyeNovio,
         precioTotal: total,
         comisionAgencia: comision
       }));
-    }, [formData.precioBaseCena, formData.extras, formData.asistentes, formData.vieneDeAgencia]);
+    }, [formData.asistentes, formData.precioPorPersona, formData.extras, formData.vieneDeAgencia]);
 
     const agregarExtra = () => {
       if (nuevoExtra.nombre && nuevoExtra.precio > 0) {
@@ -418,9 +435,10 @@ export default function App() {
         nombreGrupo: formData.nombreGrupo!,
         local: formData.local || 'Despedidas',
         asistentes: formData.asistentes!,
-        precioBaseCena: formData.precioBaseCena || 50,
+        precioPorPersona: formData.precioPorPersona || 50,
+        incluyeNovio: formData.incluyeNovio !== undefined ? formData.incluyeNovio : true,
         extras: formData.extras || [],
-        precioTotal: formData.precioTotal || 50,
+        precioTotal: formData.precioTotal || 0,
         reservaPagada: formData.reservaPagada || 0,
         vieneDeAgencia: formData.vieneDeAgencia || false,
         nombreAgencia: formData.nombreAgencia,
@@ -476,18 +494,35 @@ export default function App() {
                   <span className="ml-2 font-bold text-gray-900">{formData.asistentes || 0}</span>
                 </div>
                 <div>
-                  <span className="text-gray-600">Cena base:</span>
-                  <span className="ml-2 font-bold text-gray-900">{formatCurrency(formData.precioBaseCena || 50)}</span>
+                  <span className="text-gray-600">Precio/persona:</span>
+                  <span className="ml-2 font-bold text-gray-900">{formatCurrency(formData.precioPorPersona || 50)}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Pagan:</span>
+                  <span className="ml-2 font-bold text-gray-900">
+                    {formData.incluyeNovio ? formData.asistentes || 0 : Math.max(0, (formData.asistentes || 0) - 1)} personas
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Cena:</span>
+                  <span className="ml-2 font-bold text-gray-900">
+                    {formatCurrency((formData.incluyeNovio ? (formData.asistentes || 0) : Math.max(0, (formData.asistentes || 0) - 1)) * (formData.precioPorPersona || 50))}
+                  </span>
                 </div>
                 <div>
                   <span className="text-gray-600">Extras:</span>
                   <span className="ml-2 font-bold text-gray-900">{formatCurrency((formData.extras || []).reduce((sum, e) => sum + e.precio, 0))}</span>
                 </div>
                 <div>
-                  <span className="text-gray-600">Total cena:</span>
-                  <span className="ml-2 font-bold text-purple-700 text-lg">{formatCurrency(formData.precioTotal || 50)}</span>
+                  <span className="text-gray-600">Total:</span>
+                  <span className="ml-2 font-bold text-purple-700 text-lg">{formatCurrency(formData.precioTotal || 0)}</span>
                 </div>
               </div>
+              {(formData.asistentes || 0) >= 11 && (
+                <div className="mt-2 text-sm bg-green-100 text-green-800 p-2 rounded">
+                  🎉 11+ personas: El novio/a NO paga
+                </div>
+              )}
             </div>
 
             <div className="grid md:grid-cols-2 gap-4">
@@ -531,12 +566,12 @@ export default function App() {
 
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">
-                  Precio Base Cena
+                  Precio por Persona
                 </label>
                 <div className="w-full p-3 border-2 border-gray-300 rounded-lg bg-gray-100 font-bold text-gray-700">
-                  {formatCurrency(formData.precioBaseCena || 50)}
+                  {formatCurrency(formData.precioPorPersona || 50)} / persona
                 </div>
-                <p className="text-xs text-gray-600 mt-1">Precio fijo de la cena</p>
+                <p className="text-xs text-gray-600 mt-1">Precio fijo por persona (50€)</p>
               </div>
 
               {/* Sección de Extras */}
