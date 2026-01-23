@@ -59,12 +59,14 @@ type ViewMode = 'calendar' | 'list' | 'today' | 'agencies';
 
 // Agencias que venden para el local
 const AGENCIAS = [
-  'Agencia Costa',
-  'Eventos Galicia',
-  'Fiestas del Norte',
-  'Celebra Coruña',
-  'Party Planners',
-  'Despedidas Express',
+  'Humor Coruña',
+  'QuadAventuras',
+  'Alex Ruiz',
+  'Me Divierto',
+  'Mas Gincanas',
+  'Aventuras Galicia',
+  'Todo Fiesta',
+  'Buena Vida',
   'Otra agencia'
 ];
 
