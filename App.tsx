@@ -35,15 +35,20 @@ interface PaymentRecord {
   metodo: PaymentMethod;
 }
 
+interface Extra {
+  nombre: string;
+  precio: number;
+}
+
 interface Reservation {
   id: string;
   fecha: Date;
   nombreGrupo: string;
   local: string;
   asistentes: number;
-  precioPorPersona: number; // 10 o 20€
-  incluyeNovio: boolean; // Si >= 11, novio no paga
-  precioTotal: number; // Calculado automáticamente
+  precioBaseCena: number; // 50€ fijo
+  extras: Extra[]; // Pack copas, etc.
+  precioTotal: number; // base + sum(extras)
   reservaPagada: number; // Señal pagada (si NO es de agencia)
   vieneDeAgencia: boolean; // Si viene de agencia intermediaria
   nombreAgencia?: string; // Nombre de la agencia
@@ -102,9 +107,9 @@ const formatCurrency = (amount: number): string => {
   return `${amount.toFixed(2)}€`;
 };
 
-const calcularPrecioTotal = (asistentes: number, precioPorPersona: number, incluyeNovio: boolean): number => {
-  const personasQuePagan = incluyeNovio ? asistentes : asistentes - 1;
-  return personasQuePagan * precioPorPersona;
+const calcularPrecioTotal = (precioBaseCena: number, extras: Extra[]): number => {
+  const totalExtras = extras.reduce((sum, extra) => sum + extra.precio, 0);
+  return precioBaseCena + totalExtras;
 };
 
 const isSameDay = (date1: Date, date2: Date): boolean => {
@@ -134,7 +139,7 @@ export default function App() {
 
   // Load from localStorage
   useEffect(() => {
-    const saved = localStorage.getItem('admin_reservations_v3');
+    const saved = localStorage.getItem('admin_reservations_v4');
     if (saved) {
       try {
         const data = JSON.parse(saved);
@@ -144,6 +149,8 @@ export default function App() {
           createdAt: new Date(r.createdAt),
           vieneDeAgencia: r.vieneDeAgencia || false,
           comisionAgencia: r.comisionAgencia || 0,
+          precioBaseCena: r.precioBaseCena || 50,
+          extras: r.extras || [],
           pagos: (r.pagos || []).map((p: any) => ({
             ...p,
             fecha: new Date(p.fecha)
@@ -153,12 +160,38 @@ export default function App() {
       } catch (e) {
         console.error('Error loading reservations', e);
       }
+    } else {
+      // Migrar desde v3 si existe
+      const savedV3 = localStorage.getItem('admin_reservations_v3');
+      if (savedV3) {
+        try {
+          const data = JSON.parse(savedV3);
+          const migrated = data.map((r: any) => ({
+            ...r,
+            fecha: new Date(r.fecha),
+            createdAt: new Date(r.createdAt),
+            vieneDeAgencia: r.vieneDeAgencia || false,
+            comisionAgencia: r.comisionAgencia || 0,
+            precioBaseCena: 50,
+            extras: [],
+            precioTotal: 50, // Resetear a precio base
+            pagos: (r.pagos || []).map((p: any) => ({
+              ...p,
+              fecha: new Date(p.fecha)
+            }))
+          }));
+          setReservations(migrated);
+          console.log('Datos migrados de v3 a v4');
+        } catch (e) {
+          console.error('Error migrando datos', e);
+        }
+      }
     }
   }, []);
 
   // Save to localStorage
   useEffect(() => {
-    localStorage.setItem('admin_reservations_v3', JSON.stringify(reservations));
+    localStorage.setItem('admin_reservations_v4', JSON.stringify(reservations));
   }, [reservations]);
 
   const getSeasonSaturdays = () => {
@@ -166,8 +199,8 @@ export default function App() {
     return getSaturdaysInRange(currentYear, 3, 8);
   };
 
-  const getReservationForDate = (date: Date): Reservation | undefined => {
-    return reservations.find(r => isSameDay(r.fecha, date));
+  const getReservationsForDate = (date: Date): Reservation[] => {
+    return reservations.filter(r => isSameDay(r.fecha, date));
   };
 
   const getTodayReservations = (): Reservation[] => {
@@ -237,7 +270,15 @@ export default function App() {
     msg += `👨‍👩‍👧‍👦 *Asistentes:* ${reservation.asistentes} personas\n\n`;
     msg += `------------------\n`;
     msg += `💰 *ESTADO DE PAGO*\n`;
-    msg += `Precio por persona: ${formatCurrency(reservation.precioPorPersona)}\n`;
+    msg += `Cena base: ${formatCurrency(reservation.precioBaseCena)}\n`;
+
+    if (reservation.extras && reservation.extras.length > 0) {
+      msg += `Extras:\n`;
+      reservation.extras.forEach(extra => {
+        msg += `  • ${extra.nombre}: ${formatCurrency(extra.precio)}\n`;
+      });
+    }
+
     msg += `Total cena: ${formatCurrency(reservation.precioTotal)}\n`;
 
     if (reservation.vieneDeAgencia) {
@@ -308,9 +349,9 @@ export default function App() {
         nombreGrupo: '',
         local: 'Despedidas',
         asistentes: 0,
-        precioPorPersona: 10,
-        incluyeNovio: true,
-        precioTotal: 0,
+        precioBaseCena: 50,
+        extras: [],
+        precioTotal: 50,
         reservaPagada: 0,
         vieneDeAgencia: false,
         nombreAgencia: '',
@@ -322,22 +363,36 @@ export default function App() {
       }
     );
 
+    const [nuevoExtra, setNuevoExtra] = useState({ nombre: '', precio: 0 });
+
     useEffect(() => {
-      if (formData.asistentes && formData.precioPorPersona !== undefined) {
-        const incluyeNovio = formData.asistentes < 11;
-        const total = calcularPrecioTotal(formData.asistentes, formData.precioPorPersona, incluyeNovio);
+      const base = formData.precioBaseCena || 50;
+      const total = calcularPrecioTotal(base, formData.extras || []);
+      const comision = formData.vieneDeAgencia ? (formData.asistentes || 0) * 10 : 0;
 
-        // Si viene de agencia, calcular comisión (10€ por persona)
-        const comision = formData.vieneDeAgencia ? formData.asistentes * 10 : 0;
+      setFormData(prev => ({
+        ...prev,
+        precioTotal: total,
+        comisionAgencia: comision
+      }));
+    }, [formData.precioBaseCena, formData.extras, formData.asistentes, formData.vieneDeAgencia]);
 
+    const agregarExtra = () => {
+      if (nuevoExtra.nombre && nuevoExtra.precio > 0) {
         setFormData(prev => ({
           ...prev,
-          incluyeNovio,
-          precioTotal: total,
-          comisionAgencia: comision
+          extras: [...(prev.extras || []), { ...nuevoExtra }]
         }));
+        setNuevoExtra({ nombre: '', precio: 0 });
       }
-    }, [formData.asistentes, formData.precioPorPersona, formData.vieneDeAgencia]);
+    };
+
+    const eliminarExtra = (index: number) => {
+      setFormData(prev => ({
+        ...prev,
+        extras: (prev.extras || []).filter((_, i) => i !== index)
+      }));
+    };
 
     const handleSave = () => {
       if (!formData.nombreGrupo || !formData.contacto || !formData.asistentes) {
@@ -353,7 +408,7 @@ export default function App() {
           fecha: new Date(),
           concepto: 'Reserva inicial',
           monto: formData.reservaPagada,
-          metodo: 'BIZUM' // Puedes cambiarlo
+          metodo: 'BIZUM'
         });
       }
 
@@ -363,9 +418,9 @@ export default function App() {
         nombreGrupo: formData.nombreGrupo!,
         local: formData.local || 'Despedidas',
         asistentes: formData.asistentes!,
-        precioPorPersona: formData.precioPorPersona || 10,
-        incluyeNovio: formData.incluyeNovio !== undefined ? formData.incluyeNovio : true,
-        precioTotal: formData.precioTotal || 0,
+        precioBaseCena: formData.precioBaseCena || 50,
+        extras: formData.extras || [],
+        precioTotal: formData.precioTotal || 50,
         reservaPagada: formData.reservaPagada || 0,
         vieneDeAgencia: formData.vieneDeAgencia || false,
         nombreAgencia: formData.nombreAgencia,
@@ -382,8 +437,6 @@ export default function App() {
       setEditingReservation(null);
       setSelectedDate(null);
     };
-
-    const personasQuePagan = formData.incluyeNovio ? formData.asistentes : (formData.asistentes || 1) - 1;
 
     return (
       <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -423,23 +476,18 @@ export default function App() {
                   <span className="ml-2 font-bold text-gray-900">{formData.asistentes || 0}</span>
                 </div>
                 <div>
-                  <span className="text-gray-600">Precio/persona:</span>
-                  <span className="ml-2 font-bold text-gray-900">{formatCurrency(formData.precioPorPersona || 0)}</span>
+                  <span className="text-gray-600">Cena base:</span>
+                  <span className="ml-2 font-bold text-gray-900">{formatCurrency(formData.precioBaseCena || 50)}</span>
                 </div>
                 <div>
-                  <span className="text-gray-600">Pagan:</span>
-                  <span className="ml-2 font-bold text-gray-900">{personasQuePagan} personas</span>
+                  <span className="text-gray-600">Extras:</span>
+                  <span className="ml-2 font-bold text-gray-900">{formatCurrency((formData.extras || []).reduce((sum, e) => sum + e.precio, 0))}</span>
                 </div>
                 <div>
                   <span className="text-gray-600">Total cena:</span>
-                  <span className="ml-2 font-bold text-purple-700 text-lg">{formatCurrency(formData.precioTotal || 0)}</span>
+                  <span className="ml-2 font-bold text-purple-700 text-lg">{formatCurrency(formData.precioTotal || 50)}</span>
                 </div>
               </div>
-              {(formData.asistentes || 0) >= 11 && (
-                <div className="mt-2 text-sm bg-green-100 text-green-800 p-2 rounded">
-                  🎉 11+ personas: El novio/a NO paga
-                </div>
-              )}
             </div>
 
             <div className="grid md:grid-cols-2 gap-4">
@@ -470,7 +518,7 @@ export default function App() {
 
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">
-                  Asistentes * (total con novio/a)
+                  Asistentes *
                 </label>
                 <input
                   type="number"
@@ -483,16 +531,67 @@ export default function App() {
 
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">
-                  Precio por Persona *
+                  Precio Base Cena
                 </label>
-                <select
-                  className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  value={formData.precioPorPersona}
-                  onChange={(e) => setFormData({ ...formData, precioPorPersona: parseFloat(e.target.value) })}
-                >
-                  <option value="10">10€ / persona</option>
-                  <option value="20">20€ / persona</option>
-                </select>
+                <div className="w-full p-3 border-2 border-gray-300 rounded-lg bg-gray-100 font-bold text-gray-700">
+                  {formatCurrency(formData.precioBaseCena || 50)}
+                </div>
+                <p className="text-xs text-gray-600 mt-1">Precio fijo de la cena</p>
+              </div>
+
+              {/* Sección de Extras */}
+              <div className="md:col-span-2">
+                <label className="block text-sm font-bold text-gray-700 mb-2">
+                  Extras Opcionales (pack copas, etc.)
+                </label>
+                <div className="border-2 border-gray-300 rounded-lg p-4 space-y-3">
+                  {/* Lista de extras */}
+                  {(formData.extras || []).length > 0 && (
+                    <div className="space-y-2 mb-3">
+                      {formData.extras!.map((extra, index) => (
+                        <div key={index} className="flex items-center justify-between bg-gray-50 p-2 rounded">
+                          <div>
+                            <span className="font-medium text-gray-900">{extra.nombre}</span>
+                            <span className="ml-2 text-gray-600">{formatCurrency(extra.precio)}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => eliminarExtra(index)}
+                            className="text-red-600 hover:text-red-700 p-1"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Agregar nuevo extra */}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Nombre (ej: Pack copas)"
+                      className="flex-1 p-2 border border-gray-300 rounded"
+                      value={nuevoExtra.nombre}
+                      onChange={(e) => setNuevoExtra({ ...nuevoExtra, nombre: e.target.value })}
+                    />
+                    <input
+                      type="number"
+                      placeholder="Precio"
+                      className="w-24 p-2 border border-gray-300 rounded"
+                      value={nuevoExtra.precio || ''}
+                      onChange={(e) => setNuevoExtra({ ...nuevoExtra, precio: parseFloat(e.target.value) || 0 })}
+                    />
+                    <button
+                      type="button"
+                      onClick={agregarExtra}
+                      className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Añadir
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Checkbox Viene de Agencia */}
@@ -679,158 +778,97 @@ export default function App() {
   const renderCalendarView = () => (
     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
       {filteredSaturdays.map(saturday => {
-        const reservation = getReservationForDate(saturday);
-        const pendiente = reservation ? calcularPendienteCobro(reservation) : 0;
+        const dayReservations = getReservationsForDate(saturday);
+        const hasReservations = dayReservations.length > 0;
 
         return (
           <div
             key={saturday.toISOString()}
             className={`bg-white rounded-2xl shadow-md border-2 transition-all hover:shadow-lg ${
-              reservation
-                ? reservation.status === 'COBRADO_COMPLETO'
-                  ? 'border-green-300 bg-green-50'
-                  : reservation.status === 'CANCELLED'
-                  ? 'border-red-300 bg-red-50'
-                  : 'border-yellow-300 bg-yellow-50'
-                : 'border-gray-200'
+              hasReservations ? 'border-blue-300' : 'border-gray-200'
             }`}
           >
-            <div className="p-6">
-              <div className="flex items-center justify-between pb-4 border-b-2 border-gray-200 mb-4">
+            <div className="p-4">
+              <div className="flex items-center justify-between pb-3 border-b-2 border-gray-200 mb-3">
                 <div>
                   <p className="text-3xl font-bold text-gray-900">{saturday.getDate()}</p>
-                  <p className="text-sm text-gray-600 uppercase font-medium">
+                  <p className="text-xs text-gray-600 uppercase font-medium">
                     {saturday.toLocaleDateString('es-ES', { weekday: 'long', month: 'short' })}
                   </p>
                 </div>
-                {!reservation && (
-                  <button
-                    onClick={() => {
-                      setSelectedDate(saturday);
-                      setShowModal(true);
-                    }}
-                    className="text-blue-600 hover:text-blue-700 p-2 rounded-lg hover:bg-blue-50 transition-colors"
-                    title="Añadir reserva"
-                  >
-                    <Plus className="w-6 h-6" />
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    setSelectedDate(saturday);
+                    setShowModal(true);
+                  }}
+                  className="text-blue-600 hover:text-blue-700 p-2 rounded-lg hover:bg-blue-50 transition-colors"
+                  title="Añadir grupo"
+                >
+                  <Plus className="w-5 h-5" />
+                </button>
               </div>
 
-              {reservation ? (
-                <div className="space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <p className="font-bold text-lg text-gray-900">{reservation.nombreGrupo}</p>
-                      <p className="text-sm text-gray-600 flex items-center gap-1">
-                        <MapPin className="w-3 h-3" />
-                        {reservation.local}
-                      </p>
-                    </div>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => {
-                          setEditingReservation(reservation);
-                          setShowModal(true);
-                        }}
-                        className="text-gray-400 hover:text-blue-600 p-1.5 rounded hover:bg-blue-50"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => deleteReservation(reservation.id)}
-                        className="text-gray-400 hover:text-red-600 p-1.5 rounded hover:bg-red-50"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+              {hasReservations ? (
+                <div className="space-y-2">
+                  <div className="text-xs text-gray-600 font-medium mb-2">
+                    {dayReservations.length} grupo{dayReservations.length !== 1 ? 's' : ''}
                   </div>
-
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center gap-2 text-gray-700">
-                      <Users className="w-4 h-4" />
-                      <span className="font-medium">{reservation.asistentes} personas ({formatCurrency(reservation.precioPorPersona)}/persona)</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-gray-700">
-                      <Phone className="w-4 h-4" />
-                      <span>{reservation.contacto}</span>
-                    </div>
-                    {reservation.vieneDeAgencia && (
-                      <div className="flex items-center gap-2 text-blue-700 bg-blue-50 px-2 py-1 rounded">
-                        <Building2 className="w-4 h-4" />
-                        <span className="font-medium text-xs">{reservation.nombreAgencia}</span>
-                      </div>
-                    )}
-                    <div className="bg-white p-2 rounded-lg border border-gray-200">
-                      <div className="flex justify-between text-xs text-gray-600 mb-1">
-                        <span>Total cena:</span>
-                        <span className="font-bold">{formatCurrency(reservation.precioTotal)}</span>
-                      </div>
-                      {reservation.vieneDeAgencia ? (
-                        <div className="flex justify-between text-xs text-blue-600 mb-1">
-                          <span>Comisión agencia:</span>
-                          <span className="font-bold">-{formatCurrency(reservation.comisionAgencia)}</span>
-                        </div>
-                      ) : (
-                        <div className="flex justify-between text-xs text-green-600 mb-1">
-                          <span>Reserva:</span>
-                          <span className="font-bold">-{formatCurrency(reservation.reservaPagada)}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between text-sm font-bold pt-1 border-t border-gray-200">
-                        <span>A cobrar sábado:</span>
-                        <span className="text-orange-600">{formatCurrency(pendiente)}</span>
-                      </div>
-                    </div>
-                    {reservation.notas && (
-                      <div className="flex items-start gap-2 text-gray-600 bg-gray-50 p-2 rounded-lg">
-                        <FileText className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                        <span className="text-xs">{reservation.notas}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
+                  {dayReservations.map(reservation => (
+                    <div
+                      key={reservation.id}
+                      className={`border-l-4 ${
+                        reservation.status === 'COBRADO_COMPLETO'
+                          ? 'border-green-500 bg-green-50'
+                          : 'border-yellow-500 bg-yellow-50'
+                      } p-3 rounded-r hover:shadow transition-shadow cursor-pointer`}
                       onClick={() => {
-                        const msg = generateWhatsAppMessage(reservation);
-                        const url = `https://wa.me/${reservation.contacto.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`;
-                        window.open(url, '_blank');
+                        setEditingReservation(reservation);
+                        setShowModal(true);
                       }}
-                      className="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors text-sm"
                     >
-                      <Send className="w-4 h-4" />
-                      WhatsApp
-                    </button>
-                    <button
-                      onClick={() => {
-                        const msg = generateWhatsAppMessage(reservation);
-                        navigator.clipboard.writeText(msg);
-                        alert('Mensaje copiado al portapapeles');
-                      }}
-                      className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 px-3 rounded-lg flex items-center justify-center transition-colors"
-                      title="Copiar mensaje"
-                    >
-                      <Copy className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  {reservation.status === 'RESERVA_PAGADA' && pendiente > 0 && (
-                    <button
-                      onClick={() => marcarCobradoCompleto(reservation.id)}
-                      className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
-                    >
-                      <CheckCircle2 className="w-5 h-5" />
-                      Marcar Cobrado Completo
-                    </button>
-                  )}
-
-                  {reservation.status === 'COBRADO_COMPLETO' && (
-                    <div className="bg-green-100 text-green-800 py-2 px-3 rounded-lg font-bold text-center flex items-center justify-center gap-2">
-                      <CheckCircle2 className="w-5 h-5" />
-                      Cobrado Completo
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-sm text-gray-900 truncate flex items-center gap-1">
+                            {reservation.nombreGrupo}
+                            {reservation.vieneDeAgencia && (
+                              <Building2 className="w-3 h-3 text-blue-600 flex-shrink-0" title={reservation.nombreAgencia} />
+                            )}
+                          </p>
+                          <div className="flex items-center gap-3 mt-1 text-xs text-gray-600">
+                            <span className="flex items-center gap-1">
+                              <Users className="w-3 h-3" />
+                              {reservation.asistentes}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Phone className="w-3 h-3" />
+                              {reservation.contacto}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex gap-1 ml-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingReservation(reservation);
+                              setShowModal(true);
+                            }}
+                            className="text-gray-400 hover:text-blue-600 p-1 rounded"
+                          >
+                            <Edit className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteReservation(reservation.id);
+                            }}
+                            className="text-gray-400 hover:text-red-600 p-1 rounded"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  )}
+                  ))}
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400">
