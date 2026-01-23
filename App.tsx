@@ -258,6 +258,26 @@ export default function App() {
     saveReservation(updated);
   };
 
+  const revertirCobro = (reservationId: string) => {
+    if (!window.confirm('¿Revertir a estado pendiente? Se eliminará el último registro de cobro.')) {
+      return;
+    }
+
+    const reservation = reservations.find(r => r.id === reservationId);
+    if (!reservation) return;
+
+    // Eliminar el último pago (el que marcó como cobrado)
+    const pagosActualizados = reservation.pagos.slice(0, -1);
+
+    const updated: Reservation = {
+      ...reservation,
+      status: 'RESERVA_PAGADA',
+      pagos: pagosActualizados
+    };
+
+    saveReservation(updated);
+  };
+
   const deleteReservation = (id: string) => {
     if (window.confirm('¿Seguro que quieres eliminar esta reserva?')) {
       setReservations(reservations.filter(r => r.id !== id));
@@ -1004,12 +1024,21 @@ export default function App() {
                       >
                         <Send className="w-4 h-4" />
                       </button>
-                      {reservation.status === 'RESERVA_PAGADA' && (
+                      {reservation.status === 'RESERVA_PAGADA' ? (
                         <button
                           onClick={() => marcarCobradoCompleto(reservation.id)}
                           className="p-1.5 text-gray-400 hover:text-blue-600 rounded hover:bg-blue-50"
+                          title="Marcar como cobrado"
                         >
                           <CheckCircle2 className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => revertirCobro(reservation.id)}
+                          className="p-1.5 text-gray-400 hover:text-orange-600 rounded hover:bg-orange-50"
+                          title="Revertir a pendiente"
+                        >
+                          <XCircle className="w-4 h-4" />
                         </button>
                       )}
                     </div>
@@ -1106,13 +1135,21 @@ export default function App() {
                     <Phone className="w-5 h-5" />
                     Llamar ({reservation.contacto})
                   </button>
-                  {reservation.status === 'RESERVA_PAGADA' && (
+                  {reservation.status === 'RESERVA_PAGADA' ? (
                     <button
                       onClick={() => marcarCobradoCompleto(reservation.id)}
                       className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-bold flex items-center justify-center gap-2"
                     >
                       <CheckCircle2 className="w-5 h-5" />
                       Cobrado Completo
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => revertirCobro(reservation.id)}
+                      className="flex-1 bg-orange-600 hover:bg-orange-700 text-white py-3 px-4 rounded-lg font-bold flex items-center justify-center gap-2"
+                    >
+                      <XCircle className="w-5 h-5" />
+                      Revertir a Pendiente
                     </button>
                   )}
                 </div>
