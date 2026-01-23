@@ -20,7 +20,8 @@ import {
   List,
   CalendarCheck,
   Copy,
-  History
+  History,
+  Building2
 } from 'lucide-react';
 
 // Types
@@ -43,7 +44,10 @@ interface Reservation {
   precioPorPersona: number; // 10 o 20€
   incluyeNovio: boolean; // Si >= 11, novio no paga
   precioTotal: number; // Calculado automáticamente
-  reservaPagada: number; // Señal pagada
+  reservaPagada: number; // Señal pagada (si NO es de agencia)
+  vieneDeAgencia: boolean; // Si viene de agencia intermediaria
+  nombreAgencia?: string; // Nombre de la agencia
+  comisionAgencia: number; // 10€ * asistentes (lo que cobra la agencia)
   contacto: string;
   notas?: string;
   status: ReservationStatus;
@@ -51,7 +55,18 @@ interface Reservation {
   createdAt: Date;
 }
 
-type ViewMode = 'calendar' | 'list' | 'today';
+type ViewMode = 'calendar' | 'list' | 'today' | 'agencies';
+
+// Agencias que venden para el local
+const AGENCIAS = [
+  'Agencia Costa',
+  'Eventos Galicia',
+  'Fiestas del Norte',
+  'Celebra Coruña',
+  'Party Planners',
+  'Despedidas Express',
+  'Otra agencia'
+];
 
 // Helper functions
 const getSaturdaysInRange = (year: number, startMonth: number, endMonth: number): Date[] => {
@@ -96,6 +111,16 @@ const isSameDay = (date1: Date, date2: Date): boolean => {
     date1.getDate() === date2.getDate();
 };
 
+const calcularPendienteCobro = (reservation: Reservation): number => {
+  if (reservation.vieneDeAgencia) {
+    // Si viene de agencia, ellos ya cobraron su comisión
+    return reservation.precioTotal - reservation.comisionAgencia;
+  } else {
+    // Si es directo, restamos la reserva pagada
+    return reservation.precioTotal - reservation.reservaPagada;
+  }
+};
+
 export default function App() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth());
@@ -107,7 +132,7 @@ export default function App() {
 
   // Load from localStorage
   useEffect(() => {
-    const saved = localStorage.getItem('admin_reservations_v2');
+    const saved = localStorage.getItem('admin_reservations_v3');
     if (saved) {
       try {
         const data = JSON.parse(saved);
@@ -115,6 +140,8 @@ export default function App() {
           ...r,
           fecha: new Date(r.fecha),
           createdAt: new Date(r.createdAt),
+          vieneDeAgencia: r.vieneDeAgencia || false,
+          comisionAgencia: r.comisionAgencia || 0,
           pagos: (r.pagos || []).map((p: any) => ({
             ...p,
             fecha: new Date(p.fecha)
@@ -129,7 +156,7 @@ export default function App() {
 
   // Save to localStorage
   useEffect(() => {
-    localStorage.setItem('admin_reservations_v2', JSON.stringify(reservations));
+    localStorage.setItem('admin_reservations_v3', JSON.stringify(reservations));
   }, [reservations]);
 
   const getSeasonSaturdays = () => {
@@ -169,11 +196,15 @@ export default function App() {
     const reservation = reservations.find(r => r.id === reservationId);
     if (!reservation) return;
 
-    const pendiente = reservation.precioTotal - reservation.reservaPagada;
+    const pendiente = calcularPendienteCobro(reservation);
+
+    const concepto = reservation.vieneDeAgencia
+      ? `Cobro día evento (resto tras comisión ${reservation.nombreAgencia})`
+      : 'Cobro día del evento';
 
     const nuevoPago: PaymentRecord = {
       fecha: new Date(),
-      concepto: 'Cobro día del evento',
+      concepto,
       monto: pendiente,
       metodo: 'EFECTIVO'
     };
@@ -194,7 +225,7 @@ export default function App() {
   };
 
   const generateWhatsAppMessage = (reservation: Reservation): string => {
-    const pendiente = reservation.precioTotal - reservation.reservaPagada;
+    const pendiente = calcularPendienteCobro(reservation);
     const fecha = formatDate(reservation.fecha);
 
     let msg = `🎉 *RECORDATORIO CENA GRUPO* 🎉\n\n`;
@@ -206,7 +237,13 @@ export default function App() {
     msg += `💰 *ESTADO DE PAGO*\n`;
     msg += `Precio por persona: ${formatCurrency(reservation.precioPorPersona)}\n`;
     msg += `Total cena: ${formatCurrency(reservation.precioTotal)}\n`;
-    msg += `Reserva pagada: ${formatCurrency(reservation.reservaPagada)}\n`;
+
+    if (reservation.vieneDeAgencia) {
+      msg += `Reserva a través de: ${reservation.nombreAgencia}\n`;
+      msg += `Pagado a agencia: ${formatCurrency(reservation.comisionAgencia)}\n`;
+    } else {
+      msg += `Reserva pagada: ${formatCurrency(reservation.reservaPagada)}\n`;
+    }
 
     if (pendiente > 0) {
       msg += `❗ *A PAGAR EL SÁBADO: ${formatCurrency(pendiente)}* (efectivo)\n\n`;
@@ -273,6 +310,9 @@ export default function App() {
         incluyeNovio: true,
         precioTotal: 0,
         reservaPagada: 0,
+        vieneDeAgencia: false,
+        nombreAgencia: '',
+        comisionAgencia: 0,
         contacto: '',
         notas: '',
         status: 'RESERVA_PAGADA',
@@ -284,13 +324,18 @@ export default function App() {
       if (formData.asistentes && formData.precioPorPersona !== undefined) {
         const incluyeNovio = formData.asistentes < 11;
         const total = calcularPrecioTotal(formData.asistentes, formData.precioPorPersona, incluyeNovio);
+
+        // Si viene de agencia, calcular comisión (10€ por persona)
+        const comision = formData.vieneDeAgencia ? formData.asistentes * 10 : 0;
+
         setFormData(prev => ({
           ...prev,
           incluyeNovio,
-          precioTotal: total
+          precioTotal: total,
+          comisionAgencia: comision
         }));
       }
-    }, [formData.asistentes, formData.precioPorPersona]);
+    }, [formData.asistentes, formData.precioPorPersona, formData.vieneDeAgencia]);
 
     const handleSave = () => {
       if (!formData.nombreGrupo || !formData.contacto || !formData.asistentes) {
@@ -320,6 +365,9 @@ export default function App() {
         incluyeNovio: formData.incluyeNovio !== undefined ? formData.incluyeNovio : true,
         precioTotal: formData.precioTotal || 0,
         reservaPagada: formData.reservaPagada || 0,
+        vieneDeAgencia: formData.vieneDeAgencia || false,
+        nombreAgencia: formData.nombreAgencia,
+        comisionAgencia: formData.comisionAgencia || 0,
         contacto: formData.contacto!,
         notas: formData.notas,
         status: formData.status || 'RESERVA_PAGADA',
@@ -445,20 +493,92 @@ export default function App() {
                 </select>
               </div>
 
-              <div>
-                <label className="block text-sm font-bold text-gray-700 mb-2">
-                  Reserva Pagada (señal)
+              {/* Checkbox Viene de Agencia */}
+              <div className="md:col-span-2">
+                <label className="flex items-center gap-3 p-3 border-2 border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.vieneDeAgencia || false}
+                    onChange={(e) => setFormData({ ...formData, vieneDeAgencia: e.target.checked })}
+                    className="w-5 h-5 text-blue-600"
+                  />
+                  <div className="flex-1">
+                    <span className="font-bold text-gray-900 flex items-center gap-2">
+                      <Building2 className="w-5 h-5 text-blue-600" />
+                      ¿Viene de agencia intermediaria?
+                    </span>
+                    <p className="text-xs text-gray-600 mt-1">
+                      La agencia cobra 10€/persona y el grupo paga el resto aquí
+                    </p>
+                  </div>
                 </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  value={formData.reservaPagada || ''}
-                  onChange={(e) => setFormData({ ...formData, reservaPagada: parseFloat(e.target.value) || 0 })}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  A cobrar el sábado: {formatCurrency((formData.precioTotal || 0) - (formData.reservaPagada || 0))}
+              </div>
+
+              {/* Selector de Agencia (solo si viene de agencia) */}
+              {formData.vieneDeAgencia && (
+                <>
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">
+                      Nombre de la Agencia *
+                    </label>
+                    <select
+                      className="w-full p-3 border-2 border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-blue-50"
+                      value={formData.nombreAgencia}
+                      onChange={(e) => setFormData({ ...formData, nombreAgencia: e.target.value })}
+                    >
+                      <option value="">Selecciona agencia...</option>
+                      {AGENCIAS.map(agencia => (
+                        <option key={agencia} value={agencia}>{agencia}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">
+                      Comisión Agencia (automático)
+                    </label>
+                    <div className="w-full p-3 border-2 border-blue-300 rounded-lg bg-blue-50 font-bold text-blue-900">
+                      {formatCurrency(formData.comisionAgencia || 0)}
+                    </div>
+                    <p className="text-xs text-blue-600 mt-1">
+                      10€ × {formData.asistentes || 0} personas = ya cobrado por agencia
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {/* Reserva Pagada (solo si NO viene de agencia) */}
+              {!formData.vieneDeAgencia && (
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    Reserva Pagada (señal)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    value={formData.reservaPagada || ''}
+                    onChange={(e) => setFormData({ ...formData, reservaPagada: parseFloat(e.target.value) || 0 })}
+                  />
+                </div>
+              )}
+
+              {/* A cobrar el sábado */}
+              <div className={!formData.vieneDeAgencia ? '' : 'md:col-span-2'}>
+                <label className="block text-sm font-bold text-gray-700 mb-2">
+                  A Cobrar el Sábado
+                </label>
+                <div className="w-full p-3 border-2 border-orange-300 rounded-lg bg-orange-50 font-bold text-orange-900 text-lg">
+                  {formatCurrency(
+                    formData.vieneDeAgencia
+                      ? (formData.precioTotal || 0) - (formData.comisionAgencia || 0)
+                      : (formData.precioTotal || 0) - (formData.reservaPagada || 0)
+                  )}
+                </div>
+                <p className="text-xs text-orange-600 mt-1">
+                  {formData.vieneDeAgencia
+                    ? 'Total - Comisión agencia = A cobrar en efectivo'
+                    : 'Total - Reserva pagada = A cobrar en efectivo'}
                 </p>
               </div>
 
@@ -545,9 +665,12 @@ export default function App() {
     total: reservations.length,
     reservasPagadas: reservations.filter(r => r.status === 'RESERVA_PAGADA').length,
     cobradas: reservations.filter(r => r.status === 'COBRADO_COMPLETO').length,
-    totalReservas: reservations.reduce((sum, r) => sum + r.reservaPagada, 0),
+    totalReservas: reservations.reduce((sum, r) => {
+      // Para agencias, contamos la comisión; para directos, la reserva pagada
+      return sum + (r.vieneDeAgencia ? r.comisionAgencia : r.reservaPagada);
+    }, 0),
     totalCobrado: reservations.filter(r => r.status === 'COBRADO_COMPLETO').reduce((sum, r) => sum + r.precioTotal, 0),
-    pendienteCobrar: reservations.filter(r => r.status === 'RESERVA_PAGADA').reduce((sum, r) => sum + (r.precioTotal - r.reservaPagada), 0)
+    pendienteCobrar: reservations.filter(r => r.status === 'RESERVA_PAGADA').reduce((sum, r) => sum + calcularPendienteCobro(r), 0)
   };
 
   // Render Views
@@ -555,7 +678,7 @@ export default function App() {
     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
       {filteredSaturdays.map(saturday => {
         const reservation = getReservationForDate(saturday);
-        const pendiente = reservation ? reservation.precioTotal - reservation.reservaPagada : 0;
+        const pendiente = reservation ? calcularPendienteCobro(reservation) : 0;
 
         return (
           <div
@@ -630,15 +753,28 @@ export default function App() {
                       <Phone className="w-4 h-4" />
                       <span>{reservation.contacto}</span>
                     </div>
+                    {reservation.vieneDeAgencia && (
+                      <div className="flex items-center gap-2 text-blue-700 bg-blue-50 px-2 py-1 rounded">
+                        <Building2 className="w-4 h-4" />
+                        <span className="font-medium text-xs">{reservation.nombreAgencia}</span>
+                      </div>
+                    )}
                     <div className="bg-white p-2 rounded-lg border border-gray-200">
                       <div className="flex justify-between text-xs text-gray-600 mb-1">
                         <span>Total cena:</span>
                         <span className="font-bold">{formatCurrency(reservation.precioTotal)}</span>
                       </div>
-                      <div className="flex justify-between text-xs text-green-600 mb-1">
-                        <span>Reserva:</span>
-                        <span className="font-bold">-{formatCurrency(reservation.reservaPagada)}</span>
-                      </div>
+                      {reservation.vieneDeAgencia ? (
+                        <div className="flex justify-between text-xs text-blue-600 mb-1">
+                          <span>Comisión agencia:</span>
+                          <span className="font-bold">-{formatCurrency(reservation.comisionAgencia)}</span>
+                        </div>
+                      ) : (
+                        <div className="flex justify-between text-xs text-green-600 mb-1">
+                          <span>Reserva:</span>
+                          <span className="font-bold">-{formatCurrency(reservation.reservaPagada)}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between text-sm font-bold pt-1 border-t border-gray-200">
                         <span>A cobrar sábado:</span>
                         <span className="text-orange-600">{formatCurrency(pendiente)}</span>
@@ -716,7 +852,7 @@ export default function App() {
             <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Grupo</th>
             <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Personas</th>
             <th className="px-4 py-3 text-right text-xs font-bold text-gray-700 uppercase">Total</th>
-            <th className="px-4 py-3 text-right text-xs font-bold text-gray-700 uppercase">Reserva</th>
+            <th className="px-4 py-3 text-right text-xs font-bold text-gray-700 uppercase">Pagado</th>
             <th className="px-4 py-3 text-right text-xs font-bold text-gray-700 uppercase">A Cobrar</th>
             <th className="px-4 py-3 text-center text-xs font-bold text-gray-700 uppercase">Estado</th>
             <th className="px-4 py-3 text-right text-xs font-bold text-gray-700 uppercase">Acciones</th>
@@ -726,7 +862,8 @@ export default function App() {
           {filteredReservations
             .sort((a, b) => a.fecha.getTime() - b.fecha.getTime())
             .map(reservation => {
-              const pendiente = reservation.precioTotal - reservation.reservaPagada;
+              const pendiente = calcularPendienteCobro(reservation);
+              const pagado = reservation.vieneDeAgencia ? reservation.comisionAgencia : reservation.reservaPagada;
               return (
                 <tr key={reservation.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 text-sm font-medium text-gray-900">
@@ -734,7 +871,12 @@ export default function App() {
                   </td>
                   <td className="px-4 py-3">
                     <div>
-                      <p className="text-sm font-bold text-gray-900">{reservation.nombreGrupo}</p>
+                      <p className="text-sm font-bold text-gray-900 flex items-center gap-1">
+                        {reservation.nombreGrupo}
+                        {reservation.vieneDeAgencia && (
+                          <Building2 className="w-3 h-3 text-blue-600" title={reservation.nombreAgencia} />
+                        )}
+                      </p>
                       <p className="text-xs text-gray-500">{reservation.local}</p>
                     </div>
                   </td>
@@ -742,8 +884,13 @@ export default function App() {
                   <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
                     {formatCurrency(reservation.precioTotal)}
                   </td>
-                  <td className="px-4 py-3 text-sm text-green-600 text-right">
-                    {formatCurrency(reservation.reservaPagada)}
+                  <td className="px-4 py-3 text-sm text-right">
+                    <div className={reservation.vieneDeAgencia ? "text-blue-600" : "text-green-600"}>
+                      {formatCurrency(pagado)}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {reservation.vieneDeAgencia ? "Agencia" : "Reserva"}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-sm font-bold text-orange-600 text-right">
                     {formatCurrency(pendiente)}
@@ -821,12 +968,20 @@ export default function App() {
 
         {todayReservations.length > 0 ? (
           todayReservations.map(reservation => {
-            const pendiente = reservation.precioTotal - reservation.reservaPagada;
+            const pendiente = calcularPendienteCobro(reservation);
             return (
               <div key={reservation.id} className="bg-white p-6 rounded-xl shadow-md border-2 border-gray-200">
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <h3 className="text-xl font-bold text-gray-900">{reservation.nombreGrupo}</h3>
+                    <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                      {reservation.nombreGrupo}
+                      {reservation.vieneDeAgencia && (
+                        <span className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-xs font-bold rounded">
+                          <Building2 className="w-3 h-3" />
+                          {reservation.nombreAgencia}
+                        </span>
+                      )}
+                    </h3>
                     <p className="text-gray-600">{reservation.local}</p>
                   </div>
                   <span className={`px-3 py-1 rounded-full text-sm font-bold ${
@@ -847,10 +1002,17 @@ export default function App() {
                     <p className="text-sm text-gray-600">Total Cena</p>
                     <p className="text-lg font-bold text-gray-900">{formatCurrency(reservation.precioTotal)}</p>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Reserva Pagada</p>
-                    <p className="text-lg font-bold text-green-600">{formatCurrency(reservation.reservaPagada)}</p>
-                  </div>
+                  {reservation.vieneDeAgencia ? (
+                    <div>
+                      <p className="text-sm text-blue-600">Comisión Agencia</p>
+                      <p className="text-lg font-bold text-blue-600">{formatCurrency(reservation.comisionAgencia)}</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-sm text-green-600">Reserva Pagada</p>
+                      <p className="text-lg font-bold text-green-600">{formatCurrency(reservation.reservaPagada)}</p>
+                    </div>
+                  )}
                   <div>
                     <p className="text-sm text-gray-600">A Cobrar Hoy</p>
                     <p className="text-xl font-bold text-orange-600">{formatCurrency(pendiente)}</p>
@@ -954,7 +1116,7 @@ export default function App() {
             <p className="text-2xl font-bold text-green-900">{stats.cobradas}</p>
           </div>
           <div className="bg-purple-50 p-4 rounded-xl shadow-sm border-2 border-purple-200">
-            <p className="text-sm text-purple-700">Reservas €</p>
+            <p className="text-sm text-purple-700">Ya Recibido</p>
             <p className="text-2xl font-bold text-purple-900">{formatCurrency(stats.totalReservas)}</p>
           </div>
           <div className="bg-blue-50 p-4 rounded-xl shadow-sm border-2 border-blue-200">
