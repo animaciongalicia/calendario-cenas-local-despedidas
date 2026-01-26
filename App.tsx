@@ -23,6 +23,7 @@ import {
   History,
   Building2
 } from 'lucide-react';
+import { reservationService } from './src/reservationService';
 
 // Types
 type ReservationStatus = 'RESERVA_PAGADA' | 'COBRADO_COMPLETO' | 'CANCELLED';
@@ -140,64 +141,29 @@ export default function App() {
   const [editingReservation, setEditingReservation] = useState<Reservation | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
 
-  // Load from localStorage
+  // Load from Supabase (with localStorage fallback)
   useEffect(() => {
-    const saved = localStorage.getItem('admin_reservations_v5');
-    if (saved) {
+    const loadData = async () => {
       try {
-        const data = JSON.parse(saved);
-        const parsed = data.map((r: any) => ({
-          ...r,
-          fecha: new Date(r.fecha),
-          createdAt: new Date(r.createdAt),
-          vieneDeAgencia: r.vieneDeAgencia || false,
-          comisionAgencia: r.comisionAgencia || 0,
-          precioPorPersona: r.precioPorPersona || 50,
-          incluyeNovio: r.incluyeNovio !== undefined ? r.incluyeNovio : (r.asistentes < 11),
-          extras: r.extras || [],
-          pagos: (r.pagos || []).map((p: any) => ({
-            ...p,
-            fecha: new Date(p.fecha)
-          }))
-        }));
-        setReservations(parsed);
-      } catch (e) {
-        console.error('Error loading reservations', e);
-      }
-    } else {
-      // Migrar desde v3/v4 si existe
-      const savedV4 = localStorage.getItem('admin_reservations_v4') || localStorage.getItem('admin_reservations_v3');
-      if (savedV4) {
-        try {
-          const data = JSON.parse(savedV4);
-          const migrated = data.map((r: any) => ({
-            ...r,
-            fecha: new Date(r.fecha),
-            createdAt: new Date(r.createdAt),
-            vieneDeAgencia: r.vieneDeAgencia || false,
-            precioPorPersona: 50,
-            incluyeNovio: r.asistentes < 11,
-            extras: [],
-            precioTotal: r.asistentes >= 11 ? (r.asistentes - 1) * 50 : r.asistentes * 50,
-            comisionAgencia: r.vieneDeAgencia ? (r.asistentes >= 11 ? (r.asistentes - 1) * 10 : r.asistentes * 10) : 0,
-            pagos: (r.pagos || []).map((p: any) => ({
-              ...p,
-              fecha: new Date(p.fecha)
-            }))
-          }));
-          setReservations(migrated);
-          console.log('Datos migrados a v5');
-        } catch (e) {
-          console.error('Error migrando datos', e);
+        // Primero intentar migrar datos de localStorage a Supabase
+        const result = await reservationService.migrateFromLocalStorage();
+        if (result.migrated > 0) {
+          console.log(`✅ Migrados ${result.migrated} registros a Supabase`);
         }
+
+        // Cargar todas las reservaciones desde Supabase
+        const data = await reservationService.loadAll();
+        setReservations(data);
+        console.log(`✅ Cargadas ${data.length} reservaciones desde Supabase`);
+      } catch (error) {
+        console.error('Error loading data:', error);
       }
-    }
+    };
+
+    loadData();
   }, []);
 
-  // Save to localStorage
-  useEffect(() => {
-    localStorage.setItem('admin_reservations_v5', JSON.stringify(reservations));
-  }, [reservations]);
+  // No longer needed - data is saved to Supabase automatically via reservationService
 
   const getSeasonSaturdays = () => {
     const currentYear = new Date().getFullYear();
@@ -221,13 +187,18 @@ export default function App() {
       (r.notas && r.notas.toLowerCase().includes(query));
   });
 
-  const saveReservation = (reservation: Reservation) => {
+  const saveReservation = async (reservation: Reservation) => {
     const existingIndex = reservations.findIndex(r => r.id === reservation.id);
+
     if (existingIndex >= 0) {
+      // Actualizar existente
+      await reservationService.update(reservation);
       const updated = [...reservations];
       updated[existingIndex] = reservation;
       setReservations(updated);
     } else {
+      // Crear nuevo
+      await reservationService.save(reservation);
       setReservations([...reservations, reservation]);
     }
   };
@@ -278,8 +249,9 @@ export default function App() {
     saveReservation(updated);
   };
 
-  const deleteReservation = (id: string) => {
+  const deleteReservation = async (id: string) => {
     if (window.confirm('¿Seguro que quieres eliminar esta reserva?')) {
+      await reservationService.delete(id);
       setReservations(reservations.filter(r => r.id !== id));
     }
   };
