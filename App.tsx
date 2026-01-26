@@ -724,7 +724,7 @@ export default function App() {
                 <input
                   type="tel"
                   className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="678288284"
+                  placeholder="+34 678288284"
                   value={formData.contacto}
                   onChange={(e) => setFormData({ ...formData, contacto: e.target.value })}
                 />
