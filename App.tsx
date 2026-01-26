@@ -215,9 +215,9 @@ export default function App() {
 
   const filteredReservations = reservations.filter(r => {
     const query = searchQuery.toLowerCase();
-    return r.nombreGrupo.toLowerCase().includes(query) ||
-      r.contacto.includes(query) ||
-      r.local.toLowerCase().includes(query) ||
+    return r.nombreGrupo?.toLowerCase().includes(query) ||
+      r.contacto?.includes(query) ||
+      r.local?.toLowerCase().includes(query) ||
       (r.notas && r.notas.toLowerCase().includes(query));
   });
 
@@ -313,7 +313,9 @@ export default function App() {
     msg += `Total cena: ${formatCurrency(reservation.precioTotal)}\n`;
 
     if (reservation.vieneDeAgencia) {
-      msg += `Reserva a través de: ${reservation.nombreAgencia}\n`;
+      if (reservation.nombreAgencia) {
+        msg += `Reserva a través de: ${reservation.nombreAgencia}\n`;
+      }
       msg += `Pagado a agencia: ${formatCurrency(reservation.comisionAgencia)}\n`;
     } else {
       msg += `Reserva pagada: ${formatCurrency(reservation.reservaPagada)}\n`;
@@ -434,6 +436,11 @@ export default function App() {
     const handleSave = () => {
       if (!formData.nombreGrupo || !formData.contacto || !formData.asistentes) {
         alert('Por favor, rellena los campos obligatorios');
+        return;
+      }
+
+      if (formData.vieneDeAgencia && !formData.nombreAgencia) {
+        alert('Por favor, selecciona la agencia');
         return;
       }
 
@@ -696,7 +703,7 @@ export default function App() {
                       {formatCurrency(formData.comisionAgencia || 0)}
                     </div>
                     <p className="text-xs text-blue-600 mt-1">
-                      10€ × {formData.asistentes || 0} personas = ya cobrado por agencia
+                      10€ × {formData.incluyeNovio ? (formData.asistentes || 0) : Math.max(0, (formData.asistentes || 0) - 1)} persona{((formData.incluyeNovio ? (formData.asistentes || 0) : Math.max(0, (formData.asistentes || 0) - 1)) !== 1) ? 's' : ''} que pagan = ya cobrado por agencia
                     </p>
                   </div>
                 </>
@@ -832,9 +839,9 @@ export default function App() {
     }, 0),
     totalCobrado: reservations.filter(r => r.status === 'COBRADO_COMPLETO').reduce((sum, r) => {
       // Solo sumamos lo que realmente cobramos nosotros
-      // Si es "Otra agencia", no sumamos el total porque ellos se quedan con la comisión
+      // Si es "Otra agencia", sumamos el total menos su comisión
       if (r.vieneDeAgencia && r.nombreAgencia === 'Otra agencia') {
-        return sum;
+        return sum + (r.precioTotal - r.comisionAgencia);
       }
       return sum + r.precioTotal;
     }, 0),
@@ -1199,7 +1206,13 @@ export default function App() {
     const saturdayData = saturdays.map(saturday => {
       const dayReservations = getReservationsForDate(saturday);
       const totalAsistentes = dayReservations.reduce((sum, r) => sum + r.asistentes, 0);
-      const totalDinero = dayReservations.reduce((sum, r) => sum + r.precioTotal, 0);
+      const totalDinero = dayReservations.reduce((sum, r) => {
+        // Si es "Otra agencia", solo sumamos lo que nosotros cobramos (total - comisión)
+        if (r.vieneDeAgencia && r.nombreAgencia === 'Otra agencia') {
+          return sum + (r.precioTotal - r.comisionAgencia);
+        }
+        return sum + r.precioTotal;
+      }, 0);
 
       const month = saturday.getMonth();
       monthsData[month].asistentes += totalAsistentes;
