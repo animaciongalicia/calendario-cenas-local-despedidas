@@ -73,6 +73,7 @@ const AGENCIAS = [
   'Mas Gincanas',
   'Aventuras Galicia',
   'Todo Fiesta',
+  'Paradise',
   'Buena Vida',
   'Otra agencia'
 ];
